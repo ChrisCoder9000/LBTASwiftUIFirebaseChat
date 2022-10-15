@@ -11,7 +11,7 @@ import SwiftUI
 struct LBTASwiftUIFirebaseChatApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LoginView(didCompleteLoginProcess: {})
         }
     }
 }
