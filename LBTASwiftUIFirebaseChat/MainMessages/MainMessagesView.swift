@@ -7,6 +7,15 @@
 
 import SwiftUI
 import SDWebImageSwiftUI
+import FirebaseFirestoreSwift
+
+extension Date {
+
+    static func diffDate(lhs: Date, rhs: Date) -> TimeInterval {
+        return lhs.timeIntervalSinceReferenceDate - rhs.timeIntervalSinceReferenceDate
+    }
+
+}
 
 class MainMessagesViewModel: ObservableObject {
     @Published var errorMessage = ""
@@ -14,7 +23,42 @@ class MainMessagesViewModel: ObservableObject {
     
     init() {
         self.isUserCurrentlyLoggedOut = FirebaseManager.shared.auth.currentUser?.uid == nil
+        
         fetchCurrentUser()
+        fetchRecentMessages()
+    }
+    
+    @Published var recentMessages = [RecentMessage]()
+    
+    private func fetchRecentMessages() {
+        guard let uid = FirebaseManager.shared.auth.currentUser?.uid else { return }
+        FirebaseManager.shared.firestore.collection("recent_messages")
+            .document(uid)
+            .collection("messages")
+            .order(by: "timestamp")
+            .addSnapshotListener { querySnapshot, err in
+                if let err = err {
+                    self.errorMessage = "Failed to listen for recent messages: \(err)"
+                    print(err)
+                    return}
+                
+                querySnapshot?.documentChanges.forEach({ change in
+                    let docId = ChatMessage(documentId: change.document.documentID, data: change.document.data())
+                    if let index = self.recentMessages.firstIndex(where: { recentMessage in
+                        return recentMessage.toId == docId.toId
+                    }) {
+                        self.recentMessages.remove(at: index)
+                    }
+//                    do {
+                        if let rm = try? change.document.data(as: RecentMessage.self) {
+                            self.recentMessages.insert(rm, at: 0)
+                        }
+//                    } catch {
+//                        print(error)
+//                    }
+//                    self.recentMessages.insert(.init(documentId: docId.documentId, data: change.document.data()), at: 0)
+                })
+            }
     }
     
     func fetchCurrentUser() {
@@ -32,19 +76,18 @@ class MainMessagesViewModel: ObservableObject {
             guard let data = snapshot?.data() else { return }
             
             self.chatUser = .init(data: data)
-        
-            self.chatUser = ChatUser(
-                uid: uid ?? "",
-                email: email ?? "",
-                profileImageUrl: profileImageUrl ?? ""
-            )
         }
     }
     
     @Published var isUserCurrentlyLoggedOut = false
     
     func handleSignout() {
-        try? FirebaseManager.shared.auth.signOut()
+        do {
+            try FirebaseManager.shared.auth.signOut()
+            isUserCurrentlyLoggedOut = true
+        } catch {
+            print("error signing out")
+        }
     }
 }
 
@@ -53,12 +96,17 @@ struct MainMessagesView: View {
     @State var shouldShowLogoutOptions: Bool = false
     @ObservedObject private var vm = MainMessagesViewModel()
     
+    @State var shouldNavigateToChatLogView = false
     
     var body: some View {
         NavigationView {
             VStack {
                 customNavBar
                 messagesView
+                
+                NavigationLink("", isActive: $shouldNavigateToChatLogView) {
+                    ChatLogView(chatUser: self.chatUser)
+                }
             }
             .overlay(newMessageButton, alignment: .bottom)
             .navigationBarHidden(true)
@@ -76,10 +124,11 @@ struct MainMessagesView: View {
                 .cornerRadius(25)
             
             VStack(alignment: .leading, spacing: 4) {
-                let userName = vm.chatUser?.email
-                    .replacingOccurrences(of: "@gmail.com", with: "") ?? ""
-                Text(userName)
-                    .font(.system(size: 24, weight: .bold))
+                if let mail = vm.chatUser?.email {
+                    let domain = mail[(mail.range(of: "@")!.upperBound...)]
+                    Text(mail.replacingOccurrences(of: "@\(domain)", with: ""))
+                        .font(.system(size: 24, weight: .bold))
+                }
                 HStack {
                     Circle()
                         .foregroundColor(.green)
@@ -104,7 +153,6 @@ struct MainMessagesView: View {
         .actionSheet(isPresented: $shouldShowLogoutOptions) {
             .init(title: Text("Settings"), message: Text("What do you want to do?"), buttons: [
                 .destructive(Text("Sign Out"), action: {
-                    print("handle sign out")
                     vm.handleSignout()
                 }),
                 .cancel()
@@ -120,30 +168,43 @@ struct MainMessagesView: View {
     
     private var messagesView: some View {
         ScrollView {
-            ForEach(0..<10, id: \.self) {num in
+            ForEach(vm.recentMessages) {recentMessage in
                 VStack {
-                    HStack(spacing: 16) {
-                        Image(systemName: "person.fill")
-                            .font(.system(size:32))
-                            .padding(8)
-                            .overlay(RoundedRectangle(cornerRadius: 44)
-                                .stroke(Color(.label), lineWidth: 1)
-                            )
-                        VStack(alignment: .leading) {
-                            Text("Username")
-                                .font(.system(size: 16, weight: .bold))
-                            Text("Message sent to user")
-                                .font(.system(size: 16))
-                                .foregroundColor(Color(.lightGray))
+                    NavigationLink {
+                        Text("Destination")
+                    } label: {
+                        HStack(spacing: 16) {
+                            WebImage(url: URL(string: recentMessage.profileImageUrl))
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 64, height: 64)
+                                .cornerRadius(32)
+                                .overlay(RoundedRectangle(cornerRadius: 32)
+                                    .stroke(Color(.label), lineWidth: 1)
+                                )
+                            VStack(alignment: .leading) {
+                                Text(recentMessage.email)
+                                    .font(.system(size: 16, weight: .bold))
+                                Text(recentMessage.text)
+                                    .font(.system(size: 16))
+                                    .foregroundColor(Color(.lightGray))
+                                    .multilineTextAlignment(.leading)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            let dateNow = Date()
+                            let aD = (Date.diffDate(lhs: dateNow, rhs: recentMessage.timestamp)) / 60
+                            if aD <= 60 {
+                                Text("\(String(format: "%.0f", round(aD)))m ago")
+                                    .font(.system(size: 14, weight: .semibold))
+                            } else if aD >= 60 {
+                                Text("\(String(format: "%.0f", round(aD / 60)))h ago")
+                                    .font(.system(size: 14, weight: .semibold))
+                            } else if aD >= 1440 {
+                                Text("\(String(format: "%.0f", round(aD / 1440)))d ago")
+                                    .font(.system(size: 14, weight: .semibold))
+                            }
                         }
-                        Spacer()
-                        Text("22d")
-                            .font(.system(size: 14, weight: .semibold))
-                    }
-                    if num != 9 {
-                        Divider()
-                            .padding(.vertical, 8)
-                        
                     }
                 }
                 .padding(.horizontal)
@@ -153,9 +214,11 @@ struct MainMessagesView: View {
         }
     }
     
+    @State private var shouldShowNewMessageScreen = false
+    
     private var newMessageButton: some View {
         Button {
-            print("...")
+            shouldShowNewMessageScreen.toggle()
         } label: {
             HStack {
                 Spacer()
@@ -170,7 +233,16 @@ struct MainMessagesView: View {
             .padding(.horizontal)
             .shadow(radius: 3)
         }
+        .fullScreenCover(isPresented: $shouldShowNewMessageScreen) {
+            NewMessageView(didSelectNewUser: {user in
+                print(user.email)
+                self.shouldNavigateToChatLogView.toggle()
+                self.chatUser = user
+            })
+        }
     }
+    
+    @State var chatUser: ChatUser?
 }
 
 struct MainMessagesView_Previews: PreviewProvider {

@@ -7,8 +7,11 @@
 
 import SwiftUI
 import FirebaseStorage
+import FirebaseAuth
 
 struct LoginView: View {
+    
+    @Environment(\.presentationMode) var presentationMode
     
     let didCompleteLoginProcess: () -> ()
     
@@ -16,6 +19,8 @@ struct LoginView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var shouldShowImagePicker = false
+    
+    @State private var isLogged = false
     
     var body: some View {
         NavigationView {
@@ -60,7 +65,7 @@ struct LoginView: View {
                         SecureField("Password", text: $password)
                     }
                     .padding(12)
-                    .background(.white)
+                    .background(Color(.white))
                     
                     Button {
                         handleAction()
@@ -73,7 +78,7 @@ struct LoginView: View {
                                 .font(.system(size: 14, weight: .semibold))
                             Spacer()
                         }
-                        .background(.blue)
+                        .background(Color(.blue))
                     }
                     Text(self.loginStatusMessage)
                         .foregroundColor(.red)
@@ -89,13 +94,18 @@ struct LoginView: View {
         .fullScreenCover(isPresented: $shouldShowImagePicker) {
             ImagePicker(image: $image)
         }
+        .fullScreenCover(isPresented: $shouldShowImagePicker) {
+            ImagePicker(image: $image)
+        }
+        .fullScreenCover(isPresented: $isLogged) {
+            MainMessagesView()
+        }
     }
     
     @State var image: UIImage?
     
     private func handleAction() {
         if isLogginMode {
-            print("should loggin in")
             loginUser()
         } else {
             createAccount()
@@ -110,7 +120,7 @@ struct LoginView: View {
             }
             self.loginStatusMessage = "Successfully logged in as user: \(String(describing: res?.user.uid))"
             self.didCompleteLoginProcess()
-            print(loginStatusMessage)
+            self.isLogged = true
         }
     }
     
@@ -174,6 +184,7 @@ struct LoginView: View {
                 }
                 print("success")
                 self.didCompleteLoginProcess()
+                self.isLogged = true
             }
     }
 }
